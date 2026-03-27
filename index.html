@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Starship Commander: Deep Space Breakout</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #000;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            border: 2px solid #333;
+        }
+        #gameCanvas {
+            display: block;
+            background: #000;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            font-size: 18px;
+            text-shadow: 0 0 5px #0ff;
+        }
+        #gameOver {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', monospace;
+        }
+        #gameOver h1 {
+            color: #f00;
+            font-size: 48px;
+            text-shadow: 0 0 20px #f00;
+            margin-bottom: 20px;
+        }
+        #gameOver p {
+            color: #fff;
+            font-size: 24px;
+            margin-bottom: 30px;
+        }
+        #restartBtn {
+            padding: 15px 40px;
+            font-size: 20px;
+            background: linear-gradient(180deg, #0ff, #008);
+            border: 2px solid #0ff;
+            color: #fff;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            text-transform: uppercase;
+            transition: all 0.3s;
+        }
+        #restartBtn:hover {
+            background: linear-gradient(180deg, #0ff, #00f);
+            box-shadow: 0 0 20px #0ff;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui">
+            <span>分数: <span id="score">0</span></span>
+            <span>生命值: <span id="health">100</span></span>
+        </div>
+        <div id="gameOver">
+            <h1>GAME OVER</h1>
+            <p>最终分数: <span id="finalScore">0</span></p>
+            <button id="restartBtn">重新开始</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const WIDTH = 800;
+        const HEIGHT = 600;
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+
+        let score = 0;
+        let health = 100;
+        let gameRunning = true;
+        let lastTime = 0;
+        let difficultyTimer = 0;
+        let difficulty = 1;
+
+        const stars = [];
+        for (let i = 0; i < 80; i++) {
+            stars.push({
+                x: Math.random() * WIDTH,
+                y: Math.random() * HEIGHT,
+                size: Math.random() * 2 + 0.5,
+                speed: Math.random() * 2 + 1
+            });
+        }
+
+        const magicDust = [];
+        for (let i = 0; i < 30; i++) {
+            magicDust.push({
+                x: Math.random() * WIDTH,
+                y: Math.random() * HEIGHT,
+                size: Math.random() * 3 + 2,
+                speed: Math.random() * 0.5 + 0.3,
+                wobble: Math.random() * Math.PI * 2,
+                wobbleSpeed: Math.random() * 0.02 + 0.01
+            });
+        }
+
+        const player = {
+            x: WIDTH / 2,
+            y: HEIGHT - 80,
+            vx: 0,
+            vy: 0,
+            size: 20,
+            angle: 0,
+            cooldown: 0
+        };
+
+        const bullets = [];
+        const enemies = [];
+        const crystals = [];
+        const particles = [];
+
+        const keys = {};
+        document.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'Space') e.preventDefault();
+        });
+        document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        document.getElementById('restartBtn').addEventListener('click', restartGame);
+
+        function spawnCrystal() {
+            crystals.push({
+                x: Math.random() * (WIDTH - 40) + 20,
+                y: -20,
+                size: 15,
+                vy: Math.random() * 2 + 1
+            });
+        }
+
+        function spawnEnemy() {
+            const side = Math.floor(Math.random() * 3);
+            let x, y;
+            if (side === 0) {
+                x = Math.random() * WIDTH;
+                y = -30;
+            } else if (side === 1) {
+                x = -30;
+                y = Math.random() * HEIGHT / 2;
+            } else {
+                x = WIDTH + 30;
+                y = Math.random() * HEIGHT / 2;
+            }
+            enemies.push({
+                x: x,
+                y: y,
+                size: 18,
+                speed: 1.5 + Math.random() * difficulty * 0.5,
+                sides: Math.floor(Math.random() * 4) + 3,
+                rotation: Math.random() * Math.PI * 2,
+                rotationSpeed: (Math.random() - 0.5) * 0.1
+            });
+        }
+
+        function createExplosion(x, y, colors) {
+            const explosionColors = colors || ['#0ff', '#f0f', '#ff0'];
+            for (let i = 0; i < 12; i++) {
+                const angle = (Math.PI * 2 / 12) * i + Math.random() * 0.3;
+                const speed = 2 + Math.random() * 4;
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    life: 40,
+                    maxLife: 40,
+                    color: explosionColors[Math.floor(Math.random() * explosionColors.length)],
+                    size: 3 + Math.random() * 4,
+                    type: Math.random() > 0.5 ? 'square' : 'triangle'
+                });
+            }
+        }
+
+        function spawnEngineTrail() {
+            const speed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+            if (speed < 0.5) return;
+
+            const t = Math.random();
+            const color = t < 0.5 ? '#0ff' : '#f0f';
+            
+            particles.push({
+                x: player.x + (Math.random() - 0.5) * 8,
+                y: player.y + player.size * 0.5,
+                vx: -player.vx * 0.3 + (Math.random() - 0.5) * 2,
+                vy: -player.vy * 0.3 + Math.random() * 2 + 1,
+                life: 20,
+                maxLife: 20,
+                color: color,
+                size: 4 + Math.random() * 3,
+                type: 'trail'
+            });
+        }
+
+        function updatePlayer(dt) {
+            const accel = 0.3;
+            const friction = 0.95;
+            const maxSpeed = 6;
+
+            if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= accel;
+            if (keys['ArrowRight'] || keys['KeyD']) player.vx += accel;
+            if (keys['ArrowUp'] || keys['KeyW']) player.vy -= accel;
+            if (keys['ArrowDown'] || keys['KeyS']) player.vy += accel;
+
+            player.vx *= friction;
+            player.vy *= friction;
+
+            const speed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+            if (speed > maxSpeed) {
+                player.vx = (player.vx / speed) * maxSpeed;
+                player.vy = (player.vy / speed) * maxSpeed;
+            }
+
+            player.x += player.vx;
+            player.y += player.vy;
+
+            player.x = Math.max(player.size, Math.min(WIDTH - player.size, player.x));
+            player.y = Math.max(player.size, Math.min(HEIGHT - player.size, player.y));
+
+            if (player.vx !== 0 || player.vy !== 0) {
+                player.angle = Math.atan2(player.vy, player.vx);
+                if (Math.random() > 0.5) spawnEngineTrail();
+            }
+
+            if (keys['Space'] && player.cooldown <= 0) {
+                bullets.push({
+                    x: player.x,
+                    y: player.y - player.size,
+                    vy: -10,
+                    size: 5,
+                    trail: []
+                });
+                player.cooldown = 15;
+            }
+            if (player.cooldown > 0) player.cooldown--;
+        }
+
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const b = bullets[i];
+                b.trail.push({ x: b.x, y: b.y });
+                if (b.trail.length > 8) b.trail.shift();
+                
+                b.y += b.vy;
+                if (b.y < -10) {
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+
+        function updateEnemies() {
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const e = enemies[i];
+                e.rotation += e.rotationSpeed;
+                
+                const dx = player.x - e.x;
+                const dy = player.y - e.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > 0) {
+                    e.x += (dx / dist) * e.speed;
+                    e.y += (dy / dist) * e.speed;
+                }
+
+                if (dist < player.size + e.size) {
+                    health -= 10;
+                    createExplosion(e.x, e.y, ['#f00', '#ff0', '#f90']);
+                    enemies.splice(i, 1);
+                    updateUI();
+                    if (health <= 0) {
+                        endGame();
+                    }
+                    continue;
+                }
+
+                for (let j = bullets.length - 1; j >= 0; j--) {
+                    const bdx = bullets[j].x - e.x;
+                    const bdy = bullets[j].y - e.y;
+                    const bdist = Math.sqrt(bdx * bdx + bdy * bdy);
+                    if (bdist < e.size + bullets[j].size) {
+                        createExplosion(e.x, e.y, ['#0ff', '#f0f', '#ff0']);
+                        enemies.splice(i, 1);
+                        bullets.splice(j, 1);
+                        score += 10;
+                        updateUI();
+                        break;
+                    }
+                }
+            }
+        }
+
+        function updateCrystals() {
+            for (let i = crystals.length - 1; i >= 0; i--) {
+                crystals[i].y += crystals[i].vy;
+
+                const dx = player.x - crystals[i].x;
+                const dy = player.y - crystals[i].y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < player.size + crystals[i].size) {
+                    crystals.splice(i, 1);
+                    score += 5;
+                    health = Math.min(100, health + 2);
+                    updateUI();
+                    continue;
+                }
+
+                if (crystals[i].y > HEIGHT + 20) {
+                    crystals.splice(i, 1);
+                }
+            }
+        }
+
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life--;
+                if (p.type === 'trail') {
+                    p.size *= 0.92;
+                    p.vy += 0.05;
+                } else {
+                    p.size *= 0.96;
+                    p.vx *= 0.98;
+                    p.vy *= 0.98;
+                }
+                if (p.life <= 0 || p.size < 0.5) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        function updateStars() {
+            for (let star of stars) {
+                star.y += star.speed;
+                if (star.y > HEIGHT) {
+                    star.y = 0;
+                    star.x = Math.random() * WIDTH;
+                }
+            }
+        }
+
+        function updateMagicDust() {
+            for (let dust of magicDust) {
+                dust.y += dust.speed;
+                dust.wobble += dust.wobbleSpeed;
+                dust.x += Math.sin(dust.wobble) * 0.5;
+                
+                if (dust.y > HEIGHT) {
+                    dust.y = -10;
+                    dust.x = Math.random() * WIDTH;
+                }
+                if (dust.x < 0) dust.x = WIDTH;
+                if (dust.x > WIDTH) dust.x = 0;
+            }
+        }
+
+        function drawStars() {
+            ctx.fillStyle = '#fff';
+            for (let star of stars) {
+                ctx.globalAlpha = 0.3 + star.size * 0.3;
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        }
+
+        function drawMagicDust() {
+            for (let dust of magicDust) {
+                ctx.globalAlpha = 0.4 + Math.sin(dust.wobble) * 0.2;
+                ctx.fillStyle = '#d8bfd8';
+                ctx.shadowColor = '#d8bfd8';
+                ctx.shadowBlur = 8;
+                ctx.beginPath();
+                ctx.arc(dust.x, dust.y, dust.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
+        }
+
+        function drawPlayer() {
+            ctx.save();
+            ctx.translate(player.x, player.y);
+            
+            ctx.fillStyle = '#0ff';
+            ctx.shadowColor = '#0ff';
+            ctx.shadowBlur = 15;
+            ctx.beginPath();
+            ctx.moveTo(0, -player.size);
+            ctx.lineTo(-player.size * 0.7, player.size * 0.7);
+            ctx.lineTo(0, player.size * 0.3);
+            ctx.lineTo(player.size * 0.7, player.size * 0.7);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.fillStyle = '#f0f';
+            ctx.shadowColor = '#f0f';
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.moveTo(0, -player.size * 0.5);
+            ctx.lineTo(-player.size * 0.3, player.size * 0.3);
+            ctx.lineTo(player.size * 0.3, player.size * 0.3);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        function drawBullets() {
+            for (let b of bullets) {
+                if (b.trail.length > 1) {
+                    for (let i = 0; i < b.trail.length - 1; i++) {
+                        const alpha = i / b.trail.length * 0.6;
+                        const size = b.size * (i / b.trail.length) * 0.8;
+                        ctx.globalAlpha = alpha;
+                        ctx.fillStyle = '#ff0';
+                        ctx.fillRect(
+                            b.trail[i].x - size / 2,
+                            b.trail[i].y - size,
+                            size,
+                            size * 2
+                        );
+                    }
+                }
+                ctx.globalAlpha = 1;
+                ctx.fillStyle = '#ff0';
+                ctx.shadowColor = '#ff0';
+                ctx.shadowBlur = 12;
+                ctx.fillRect(b.x - b.size / 2, b.y - b.size * 2, b.size, b.size * 3);
+                
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(b.x - 1, b.y - b.size, 2, b.size * 1.5);
+            }
+            ctx.shadowBlur = 0;
+        }
+
+        function drawPolygon(x, y, radius, sides, rotation) {
+            ctx.beginPath();
+            for (let i = 0; i < sides; i++) {
+                const angle = (Math.PI * 2 / sides) * i + rotation;
+                const px = x + Math.cos(angle) * radius;
+                const py = y + Math.sin(angle) * radius;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+        }
+
+        function drawEnemies() {
+            for (let e of enemies) {
+                ctx.fillStyle = '#f00';
+                ctx.shadowColor = '#f00';
+                ctx.shadowBlur = 15;
+                drawPolygon(e.x, e.y, e.size, e.sides, e.rotation);
+                ctx.fill();
+
+                ctx.fillStyle = '#800';
+                ctx.shadowBlur = 5;
+                drawPolygon(e.x, e.y, e.size * 0.5, e.sides, -e.rotation * 1.5);
+                ctx.fill();
+                
+                ctx.fillStyle = '#fff';
+                ctx.globalAlpha = 0.3;
+                ctx.beginPath();
+                ctx.arc(e.x, e.y, e.size * 0.2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+            ctx.shadowBlur = 0;
+        }
+
+        function drawCrystals() {
+            ctx.fillStyle = '#0f0';
+            ctx.shadowColor = '#0f0';
+            ctx.shadowBlur = 12;
+            for (let c of crystals) {
+                ctx.save();
+                ctx.translate(c.x, c.y);
+                ctx.rotate(Date.now() * 0.003);
+                ctx.fillRect(-c.size / 2, -c.size / 2, c.size, c.size);
+                ctx.restore();
+            }
+            ctx.shadowBlur = 0;
+        }
+
+        function drawParticles() {
+            for (let p of particles) {
+                ctx.globalAlpha = p.life / p.maxLife;
+                ctx.fillStyle = p.color;
+                ctx.shadowColor = p.color;
+                ctx.shadowBlur = 6;
+
+                if (p.type === 'square') {
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate(p.life * 0.2);
+                    ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+                    ctx.restore();
+                } else if (p.type === 'triangle') {
+                    ctx.beginPath();
+                    ctx.moveTo(p.x, p.y - p.size);
+                    ctx.lineTo(p.x - p.size, p.y + p.size * 0.5);
+                    ctx.lineTo(p.x + p.size, p.y + p.size * 0.5);
+                    ctx.closePath();
+                    ctx.fill();
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1;
+        }
+
+        function updateUI() {
+            document.getElementById('score').textContent = score;
+            document.getElementById('health').textContent = health;
+        }
+
+        function endGame() {
+            gameRunning = false;
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('gameOver').style.display = 'flex';
+        }
+
+        function restartGame() {
+            score = 0;
+            health = 100;
+            difficulty = 1;
+            difficultyTimer = 0;
+            gameRunning = true;
+            
+            player.x = WIDTH / 2;
+            player.y = HEIGHT - 80;
+            player.vx = 0;
+            player.vy = 0;
+            
+            bullets.length = 0;
+            enemies.length = 0;
+            crystals.length = 0;
+            particles.length = 0;
+            
+            updateUI();
+            document.getElementById('gameOver').style.display = 'none';
+            lastTime = performance.now();
+            gameLoop(lastTime);
+        }
+
+        let crystalTimer = 0;
+        let enemyTimer = 0;
+
+        function gameLoop(timestamp) {
+            if (!gameRunning) return;
+
+            const dt = timestamp - lastTime;
+            lastTime = timestamp;
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            updateStars();
+            drawStars();
+            updateMagicDust();
+            drawMagicDust();
+
+            difficultyTimer += dt;
+            if (difficultyTimer > 10000) {
+                difficulty += 0.3;
+                difficultyTimer = 0;
+            }
+
+            crystalTimer += dt;
+            if (crystalTimer > 1500) {
+                spawnCrystal();
+                crystalTimer = 0;
+            }
+
+            enemyTimer += dt;
+            if (enemyTimer > 2000 / difficulty) {
+                spawnEnemy();
+                enemyTimer = 0;
+            }
+
+            updatePlayer(dt);
+            updateBullets();
+            updateEnemies();
+            updateCrystals();
+            updateParticles();
+
+            drawCrystals();
+            drawEnemies();
+            drawBullets();
+            drawPlayer();
+            drawParticles();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop(performance.now());
+    </script>
+</body>
+</html>
